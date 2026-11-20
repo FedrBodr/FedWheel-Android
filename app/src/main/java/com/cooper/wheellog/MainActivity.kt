@@ -618,18 +618,7 @@ class MainActivity : AppCompatActivity() {
         // add pages into main view
         pager = binding.pager
         pager.offscreenPageLimit = 10
-        val pages = ArrayList<Int>()
-        pages.add(R.layout.main_view_main)
-        pages.add(R.layout.main_view_params_list)
-        if (appConfig.pageGraph) {
-            pages.add(R.layout.main_view_graph)
-        }
-        if (appConfig.pageTrips) {
-            pages.add(R.layout.main_view_trips)
-        }
-        if (appConfig.pageEvents) {
-            pages.add(R.layout.main_view_events)
-        }
+        val pages = MainPageAdapter.initialPages(appConfig.pageGraph, appConfig.pageTrips, appConfig.pageEvents)
         pagerAdapter = MainPageAdapter(pages, this)
         pager.adapter = pagerAdapter
         pager.registerOnPageChangeCallback(object : OnPageChangeCallback() {
@@ -637,6 +626,7 @@ class MainActivity : AppCompatActivity() {
                 super.onPageSelected(position)
                 pagerAdapter.position = position
                 pagerAdapter.updateScreen(true)
+                pagerAdapter.onPageShown(position)
             }
         })
         eventsLoggingTree = EventsLoggingTree(applicationContext, pagerAdapter)

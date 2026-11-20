@@ -624,4 +624,6 @@
     <string name="voice_state_awaiting_confirm">ждёт подтверждения</string>
     <string name="voice_state_confirmed">подтверждено</string>
     <string name="voice_state_cancelled">отменено</string>
+    <string name="voice_chat_empty">Скажите что-нибудь в FedVoice на часах — разговор появится здесь</string>
+    <string name="voice_chat_thinking">думаю…</string>
 </resources>

@@ -717,4 +717,6 @@
     <string name="voice_state_awaiting_confirm">awaiting confirmation</string>
     <string name="voice_state_confirmed">confirmed</string>
     <string name="voice_state_cancelled">cancelled</string>
+    <string name="voice_chat_empty">Say something into FedVoice on your watch — the conversation will appear here</string>
+    <string name="voice_chat_thinking">thinking…</string>
 </resources>

@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener
 import android.view.*
 import android.widget.TextView
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.gridlayout.widget.GridLayout
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.RecyclerView
@@ -15,7 +17,9 @@ import com.cooper.wheellog.utils.SomeUtil.getColorEx
 import com.cooper.wheellog.utils.StringUtil.inArray
 import com.cooper.wheellog.utils.StringUtil.toTempString
 import com.cooper.wheellog.utils.ThemeManager
+import com.cooper.wheellog.ui.theme.AppTheme
 import com.cooper.wheellog.views.TripAdapter
+import com.cooper.wheellog.voice.VoiceChatPage
 import com.cooper.wheellog.views.WheelView
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.components.XAxis
@@ -25,6 +29,7 @@ import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.data.LineDataSet
 import com.github.mikephil.charting.formatter.IndexAxisValueFormatter
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.*
@@ -39,6 +44,12 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
     private var pagesView = LinkedHashMap<Int, View?>()
 
     private var listOfTrips: RecyclerView? = null
+    private val voiceChatOpened = MutableStateFlow(0)
+
+    /** Called when the pager settles on [position]; lets pages react to being swiped into view. */
+    fun onPageShown(position: Int) {
+        if (pages.getOrNull(position) == R.layout.main_view_voice_chat) voiceChatOpened.value++
+    }
 
     override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
         super.onAttachedToRecyclerView(recyclerView)
@@ -60,7 +71,7 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
                 pages.add(index, page)
             }
             pagesView[page] = null
-            notifyItemInserted(page)
+            notifyItemInserted(pages.indexOf(page))
         }
     }
 
@@ -140,6 +151,12 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
             }
             R.layout.main_view_smart_bms -> {
                 createSmartBmsPage()
+            }
+            R.layout.main_view_voice_chat -> {
+                view.findViewById<ComposeView>(R.id.voice_chat_compose)?.apply {
+                    setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+                    setContent { AppTheme { VoiceChatPage(voiceChatOpened) } }
+                }
             }
         }
     }
@@ -741,7 +758,7 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
         when (WheelData.getInstance().wheelType) {
             WHEEL_TYPE.KINGSONG -> {
                 if (inArray(WheelData.getInstance().model, arrayOf("KS-S20", "KS-S22", "KS-S19", "KS-S16", "KS-S16P", "KS-F22P", "KS-F18P", "KS-14SP"))) {
-                    addPage(R.layout.main_view_smart_bms, 2)
+                    addPage(R.layout.main_view_smart_bms, indexAfter(pages, R.layout.main_view_params_list))
                     setupFieldForSmartBmsPage(R.string.bmsSn)
                     setupFieldForSmartBmsPage(R.string.bmsFw)
                     setupFieldForSmartBmsPage(R.string.bmsFactoryCap)
@@ -836,7 +853,7 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
             }
             WHEEL_TYPE.VETERAN -> {
                 if (inArray(WheelData.getInstance().model, arrayOf("Lynx", "Lynx S", "Sherman L", "Nosfet Apex", "Nosfet Aeon", "Patton S", "Nosfet Aero", "Oryx"))) {
-                    addPage(R.layout.main_view_smart_bms, 2)
+                    addPage(R.layout.main_view_smart_bms, indexAfter(pages, R.layout.main_view_params_list))
                     setupFieldForSmartBmsPage(R.string.bmsCurrent)
                     setupFieldForSmartBmsPage(R.string.bmsVoltage)
                     setupFieldForSmartBmsPage(R.string.bmsTemp1)
@@ -903,7 +920,7 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
             WHEEL_TYPE.GOTWAY -> {
                 val data = WheelData.getInstance()
                 if (data.bms1.cellNum > 0) {
-                    addPage(R.layout.main_view_smart_bms, 2)
+                    addPage(R.layout.main_view_smart_bms, indexAfter(pages, R.layout.main_view_params_list))
                     setupFieldForSmartBmsPage(R.string.bmsCurrent)
                     setupFieldForSmartBmsPage(R.string.bmsVoltage)
                     setupFieldForSmartBmsPage(R.string.bmsSemiVoltage1)
@@ -985,7 +1002,7 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
             }
             WHEEL_TYPE.NINEBOT_Z -> {
                 if (WheelData.getInstance().protoVer == "") { //hide page for S2
-                    addPage(R.layout.main_view_smart_bms, 2)
+                    addPage(R.layout.main_view_smart_bms, indexAfter(pages, R.layout.main_view_params_list))
                     setupFieldForSmartBmsPage(R.string.bmsSn)
                     setupFieldForSmartBmsPage(R.string.bmsFw)
                     setupFieldForSmartBmsPage(R.string.bmsFactoryCap)
@@ -1042,7 +1059,7 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         when (appConfig.getResId(key)) {
             R.string.show_page_graph -> if (appConfig.pageGraph) {
-                addPage(R.layout.main_view_graph, 2)
+                addPage(R.layout.main_view_graph, indexAfter(pages, R.layout.main_view_params_list))
             } else {
                 removePage(R.layout.main_view_graph)
             }
@@ -1081,4 +1098,23 @@ class MainPageAdapter(private var pages: MutableList<Int>, val activity: MainAct
     }
 
     class ViewHolder internal constructor(view: View) : RecyclerView.ViewHolder(view)
+
+    companion object {
+        /** Pages shown on start: main, voice chat (swipe left from main), params list, then optional ones. */
+        fun initialPages(graph: Boolean, trips: Boolean, events: Boolean): MutableList<Int> = arrayListOf(
+            R.layout.main_view_main,
+            R.layout.main_view_voice_chat,
+            R.layout.main_view_params_list,
+        ).apply {
+            if (graph) add(R.layout.main_view_graph)
+            if (trips) add(R.layout.main_view_trips)
+            if (events) add(R.layout.main_view_events)
+        }
+
+        /** Insert position right after [anchor]; appends when the anchor is absent. */
+        fun indexAfter(pages: List<Int>, anchor: Int): Int {
+            val i = pages.indexOf(anchor)
+            return if (i < 0) pages.size else i + 1
+        }
+    }
 }
