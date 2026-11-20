@@ -327,7 +327,9 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
     private fun sendPort() {
         val server = mWebServer ?: return
         portAnnouncer.onAnnounced(System.currentTimeMillis())
-        sendToWatch(mApp, server.listeningPort, "port")
+        // FedWheel on the watch also does push-to-talk, so it gets the voice port too.
+        FedVoiceAnnounce.fedWheelMessages(server.listeningPort, voiceServer?.listeningPort)
+            .forEach { sendToWatch(mApp, it, if (it is Int) "port" else "fv port (FedWheel)") }
     }
 
     private fun sendVoicePort() {

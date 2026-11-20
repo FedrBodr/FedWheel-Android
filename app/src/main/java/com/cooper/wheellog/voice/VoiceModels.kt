@@ -50,4 +50,12 @@ object FedVoiceAnnounce {
 
     /** Connect IQ message announcing the voice server port to the FedVoice watch app. */
     fun message(port: Int): List<Any> = listOf("fv", port)
+
+    /**
+     * Messages for the FedWheel watch app (wheel dashboard with push-to-talk): its wheel
+     * server port (plain Number, as WheelLog always sent) and, when the voice bridge runs,
+     * the voice port in the same `["fv", port]` shape FedVoice uses.
+     */
+    fun fedWheelMessages(wheelPort: Int, voicePort: Int?): List<Any> =
+        if (voicePort == null) listOf(wheelPort) else listOf(wheelPort, message(voicePort))
 }
