@@ -529,8 +529,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleWatch() {
         togglePebbleService()
-        // TODO: Fix garmin for API 34
-        // if (appConfig.garminConnectIqEnable) toggleGarminConnectIQ() else stopGarminConnectIQ()
+        if (appConfig.garminConnectIqEnable) toggleGarminConnectIQ() else stopGarminConnectIQ()
         toggleWearOs()
     }
 

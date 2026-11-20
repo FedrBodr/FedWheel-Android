@@ -201,26 +201,48 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
         mSdkReady = false
     }
 
+    private val portAnnouncer = GarminPortAnnouncer()
+
     private fun startWebServer() {
         Timber.d("startWebServer")
         if (mWebServer != null) return
         try {
-            mWebServer = GarminConnectIQWebServer(applicationContext)
-            Timber.d("port is: ${mWebServer!!.listeningPort}")
-            try {
-                mConnectIQ?.sendMessage(mDevice, mApp, mWebServer!!.listeningPort) { _: IQDevice?, _: IQApp?, status: IQMessageStatus ->
-                    Timber.d("message status: ${status.name}")
-                    if (status.name !== "SUCCESS") Toast.makeText(this@GarminConnectIQ, status.name, Toast.LENGTH_LONG).show()
-                }
-            } catch (e: InvalidStateException) {
-                Timber.e("ConnectIQ is not in a valid state")
-                Toast.makeText(this, "ConnectIQ is not in a valid state", Toast.LENGTH_LONG).show()
-            } catch (e: ServiceUnavailableException) {
-                Timber.e("ConnectIQ service is unavailable.   Is Garmin Connect Mobile installed and running?")
-                Toast.makeText(this, "ConnectIQ service is unavailable.   Is Garmin Connect Mobile installed and running?", Toast.LENGTH_LONG).show()
+            mWebServer = GarminConnectIQWebServer(applicationContext) {
+                portAnnouncer.onWatchRequest(System.currentTimeMillis())
             }
+            Timber.d("port is: ${mWebServer!!.listeningPort}")
+            sendPort()
+            startPortAnnouncements()
         } catch (e: IOException) {
             Timber.e(e, "IOException happened while starting ConnectIQ web server")
+        }
+    }
+
+    // Upstream sent the port only once, so a watch app opened later never connected.
+    // Re-send it while the watch is not polling the web server.
+    private fun startPortAnnouncements() {
+        cancelRefreshTimer()
+        keepAliveTimer = Timer().apply {
+            schedule(object : TimerTask() {
+                override fun run() {
+                    if (mWebServer != null && portAnnouncer.shouldAnnounce(System.currentTimeMillis())) {
+                        sendPort()
+                    }
+                }
+            }, PORT_ANNOUNCE_PERIOD_MS, PORT_ANNOUNCE_PERIOD_MS)
+        }
+    }
+
+    private fun sendPort() {
+        val server = mWebServer ?: return
+        try {
+            mConnectIQ?.sendMessage(mDevice, mApp, server.listeningPort) { _: IQDevice?, _: IQApp?, status: IQMessageStatus ->
+                Timber.d("message status: ${status.name}")
+            }
+        } catch (e: InvalidStateException) {
+            Timber.e("ConnectIQ is not in a valid state")
+        } catch (e: ServiceUnavailableException) {
+            Timber.e("ConnectIQ service is unavailable. Is Garmin Connect Mobile installed and running?")
         }
     }
 
@@ -233,6 +255,7 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
     companion object {
         const val STABLE_APP_ID = "487e6172-972c-4f93-a4db-26fd689f935a"
         const val BETA_APP_ID = "433c30dc-f316-4d11-a16e-de153d297705"
+        private const val PORT_ANNOUNCE_PERIOD_MS = 2_000L
 
         private var instance: GarminConnectIQ? = null
         val isInstanceCreated: Boolean
@@ -240,7 +263,10 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
     }
 }
 
-internal class GarminConnectIQWebServer(context: Context) : NanoHTTPD("127.0.0.1", 0), KoinComponent {
+internal class GarminConnectIQWebServer(
+    context: Context,
+    private val onWatchRequest: () -> Unit = {},
+) : NanoHTTPD("127.0.0.1", 0), KoinComponent {
     private var applicationContext: Context
     private val appConfig: AppConfig by inject()
 
@@ -294,6 +320,7 @@ internal class GarminConnectIQWebServer(context: Context) : NanoHTTPD("127.0.0.1
         }
 
     override fun serve(session: IHTTPSession): Response {
+        onWatchRequest()
         val wd = WheelData.getInstance()
         val ac = appConfig
       
