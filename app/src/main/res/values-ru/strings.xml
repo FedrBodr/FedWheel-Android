@@ -608,4 +608,20 @@
     <string name="voice_server_token_title">Токен голосового сервера</string>
     <string name="voice_server_token_description">Bearer-токен для сервера FedVoice</string>
     <string name="voice_not_set">не задан</string>
+    <string name="voice_history_title">Голос</string>
+    <string name="voice_history_description">Что вы сказали в часы и что ответил ассистент</string>
+    <string name="voice_history_empty">Пока нет голосовых запросов</string>
+    <string name="voice_history_you">Вы: %1$s</string>
+    <string name="voice_history_reply">Ответ: %1$s</string>
+    <string name="voice_history_clear">Очистить</string>
+    <string name="voice_history_clear_confirm">Удалить всю историю голосовых запросов?</string>
+    <string name="voice_history_copy">Копировать</string>
+    <string name="voice_history_copied">Скопировано</string>
+    <string name="voice_history_cancel">Отмена</string>
+    <string name="voice_state_processing">обработка</string>
+    <string name="voice_state_ok">готово</string>
+    <string name="voice_state_error">ошибка</string>
+    <string name="voice_state_awaiting_confirm">ждёт подтверждения</string>
+    <string name="voice_state_confirmed">подтверждено</string>
+    <string name="voice_state_cancelled">отменено</string>
 </resources>

@@ -12,6 +12,7 @@ class VoicePipeline(
     private val agent: VoiceAgent,
     private val speaker: Speaker,
     private val scope: CoroutineScope,
+    private val history: VoiceHistory? = null,
 ) : VoiceBridgeHandler.Listener {
 
     override fun onSessionEnded(id: String, audio: ByteArray) {
@@ -28,9 +29,12 @@ class VoicePipeline(
             if (pcm.samples.isEmpty()) throw VoiceException("Пустая запись")
             text = timed(id, "stt") { stt.transcribe(pcm.samples, pcm.sampleRate) }.trim()
             log("[$id] text: \"$text\"")
+            if (text.isNotEmpty()) history(id, text = text, state = VoiceHistory.State.PROCESSING)
             if (text.isEmpty()) throw VoiceException("Не расслышал, повторите")
             val answer = timed(id, "ask") { agent.ask(text, id) }
             store.setResult(id, VoiceResult(VoiceResult.DONE, text, answer.reply, answer.pendingAction != null), answer.pendingAction?.id)
+            history(id, text = text, reply = answer.reply,
+                state = if (answer.pendingAction != null) VoiceHistory.State.AWAITING_CONFIRM else VoiceHistory.State.OK)
             log("[$id] done in ${System.currentTimeMillis() - t0} ms, needsConfirm=${answer.pendingAction != null}")
             speak(answer.reply)
         } catch (e: VoiceException) {
@@ -47,10 +51,12 @@ class VoicePipeline(
             val reply = timedBlocking(id, "confirm(yes=$yes)") { agent.confirm(actionId, yes) }
             val result = VoiceResult(VoiceResult.DONE, current.text, reply, false)
             store.setResult(id, result, null)
+            history(id, reply = reply, state = if (yes) VoiceHistory.State.CONFIRMED else VoiceHistory.State.CANCELLED)
             speak(reply)
             result
         } catch (e: VoiceException) {
             Timber.tag(TAG).w(e, "[$id] confirm failed")
+            history(id, reply = e.message ?: "Ошибка", state = VoiceHistory.State.ERROR)
             VoiceResult.error(e.message ?: "Ошибка", current.text)
         }
     }
@@ -58,7 +64,16 @@ class VoicePipeline(
     private fun fail(id: String, text: String, message: String, e: Exception) {
         Timber.tag(TAG).w(e, "[$id] failed: $message")
         store.setResult(id, VoiceResult.error(message, text))
+        history(id, text = text, reply = message, state = VoiceHistory.State.ERROR)
         speak(message)
+    }
+
+    private fun history(id: String, text: String? = null, reply: String? = null, state: VoiceHistory.State) {
+        try {
+            history?.record(id, text, reply, state)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "[$id] history record failed")
+        }
     }
 
     private fun speak(text: String) {

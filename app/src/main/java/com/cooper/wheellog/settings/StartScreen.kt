@@ -61,6 +61,13 @@ fun startScreen(
         }
 
         clickablePref(
+            name = stringResource(R.string.voice_history_title),
+            desc = stringResource(R.string.voice_history_description),
+            themeIcon = ThemeIconEnum.SettingsWatch,
+        ) {
+            onSelect(SettingsScreenEnum.Voice.name)
+        }
+        clickablePref(
             name = stringResource(R.string.speed_settings_title),
             themeIcon = ThemeIconEnum.SettingsSpeedometer,
         ) {

@@ -25,6 +25,7 @@ import com.cooper.wheellog.voice.FedVoiceAnnounce
 import com.cooper.wheellog.voice.OggOpusDecoder
 import com.cooper.wheellog.voice.VoiceBridgeHandler
 import com.cooper.wheellog.voice.VoiceBridgeServer
+import com.cooper.wheellog.voice.VoiceHistory
 import com.cooper.wheellog.voice.VoicePipeline
 import com.cooper.wheellog.voice.VoiceServerClient
 import com.cooper.wheellog.voice.VoiceSessionStore
@@ -375,6 +376,7 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
             agent = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken }),
             speaker = speaker,
             scope = scope,
+            history = VoiceHistory.get(applicationContext),
         ).also { voicePipeline = it }
         try {
             voiceServer = VoiceBridgeServer(VoiceBridgeHandler(store, pipeline)) {

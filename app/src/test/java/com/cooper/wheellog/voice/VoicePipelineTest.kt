@@ -4,16 +4,22 @@ import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 class VoicePipelineTest {
+    @get:Rule
+    val tmp = TemporaryFolder()
+    private val history by lazy { VoiceHistory(File(tmp.root, "h.json")) }
     private val store = VoiceSessionStore(idGenerator = { "sid" })
     private val spoken = mutableListOf<String>()
     private var askedWith: Pair<String, String>? = null
     private var sttText = "включи свет"
     private var agentPending: PendingAction? = null
 
-    private val pipeline = VoicePipeline(
+    private val pipeline by lazy { VoicePipeline(
         store = store,
         decoder = object : AudioDecoder {
             override fun decode(bytes: ByteArray) = Pcm(ShortArray(16_000), 16_000)
@@ -32,7 +38,8 @@ class VoicePipelineTest {
             override fun speak(text: String) { spoken += text }
         },
         scope = CoroutineScope(Dispatchers.Unconfined),
-    )
+        history = history,
+    ) }
 
     @Test
     fun processesSessionToDone(): Unit = runBlocking {
@@ -67,5 +74,48 @@ class VoicePipelineTest {
         pipeline.process(id, byteArrayOf(1))
         assertThat(store.result(id)!!.state).isEqualTo(VoiceResult.ERROR)
         assertThat(askedWith).isNull()
+    }
+
+    @Test
+    fun historyRecordsDoneExchange(): Unit = runBlocking {
+        val id = store.start()
+        pipeline.process(id, byteArrayOf(1))
+        val e = history.entries.value.single()
+        assertThat(e.sessionId).isEqualTo(id)
+        assertThat(e.text).isEqualTo("включи свет")
+        assertThat(e.reply).isEqualTo("Включаю")
+        assertThat(e.state).isEqualTo(VoiceHistory.State.OK)
+    }
+
+    @Test
+    fun historyRecordsConfirmAndCancel(): Unit = runBlocking {
+        agentPending = PendingAction("a1", "сводка")
+        val id = store.start()
+        pipeline.process(id, byteArrayOf(1))
+        assertThat(history.entries.value.single().state).isEqualTo(VoiceHistory.State.AWAITING_CONFIRM)
+        pipeline.onConfirm(id, false)
+        val e = history.entries.value.single()
+        assertThat(e.state).isEqualTo(VoiceHistory.State.CANCELLED)
+        assertThat(e.reply).isEqualTo("Отменено")
+        assertThat(e.text).isEqualTo("включи свет")
+    }
+
+    @Test
+    fun historyRecordsConfirmed(): Unit = runBlocking {
+        agentPending = PendingAction("a1", "сводка")
+        val id = store.start()
+        pipeline.process(id, byteArrayOf(1))
+        pipeline.onConfirm(id, true)
+        assertThat(history.entries.value.single().state).isEqualTo(VoiceHistory.State.CONFIRMED)
+    }
+
+    @Test
+    fun historyRecordsErrorWithRussianMessage(): Unit = runBlocking {
+        sttText = "  "
+        val id = store.start()
+        pipeline.process(id, byteArrayOf(1))
+        val e = history.entries.value.single()
+        assertThat(e.state).isEqualTo(VoiceHistory.State.ERROR)
+        assertThat(e.reply).isEqualTo("Не расслышал, повторите")
     }
 }

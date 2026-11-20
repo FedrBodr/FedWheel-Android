@@ -4,11 +4,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.cooper.wheellog.AppConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.koin.core.component.KoinComponent
+import org.koin.core.component.inject
 import timber.log.Timber
 import java.io.File
 
@@ -17,9 +20,12 @@ import java.io.File
  *  adb shell am broadcast -n com.cooper.wheellog.debug/com.cooper.wheellog.voice.VoiceDebugReceiver -a com.cooper.wheellog.debug.FEDVOICE_DIAG
  *  ... --es speak "Привет"           TTS with ducking
  *  ... --es file /sdcard/Download/q.ogg   decode -> STT, logs the text (no server call)
+ *  ... --es ask "Который час"      typed phrase through VoicePipeline (server + TTS + voice history), no audio
  * Output: adb logcat -s FedVoice
  */
-class VoiceDebugReceiver : BroadcastReceiver() {
+class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
+    private val appConfig: AppConfig by inject()
+
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
         val pending = goAsync()
@@ -40,6 +46,7 @@ class VoiceDebugReceiver : BroadcastReceiver() {
                     Timber.tag(TAG).i("debug: STT \"$text\" in ${System.currentTimeMillis() - t1} ms")
                     if (text.isNotBlank()) speaker.speak("Вы сказали: $text")
                 }
+                intent.getStringExtra("ask")?.let { phrase -> askThroughPipeline(app, phrase, speaker) }
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "debug: failed: ${e.message}")
             } finally {
@@ -48,6 +55,27 @@ class VoiceDebugReceiver : BroadcastReceiver() {
                 pending.finish()
             }
         }
+    }
+
+    private suspend fun askThroughPipeline(app: Context, phrase: String, speaker: Speaker) {
+        val store = VoiceSessionStore()
+        val pipeline = VoicePipeline(
+            store = store,
+            decoder = object : AudioDecoder {
+                override fun decode(bytes: ByteArray) = Pcm(ShortArray(1), 16_000)
+            },
+            stt = object : SpeechToText {
+                override suspend fun transcribe(pcm: ShortArray, sampleRate: Int) = phrase
+            },
+            agent = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken }),
+            speaker = speaker,
+            scope = CoroutineScope(Dispatchers.IO),
+            history = VoiceHistory.get(app),
+        )
+        val id = store.start()
+        store.end(id)
+        pipeline.process(id, byteArrayOf(0))
+        Timber.tag(TAG).i("debug: ask \"$phrase\" -> ${store.result(id)}")
     }
 
     private companion object { const val TAG = "FedVoice" }
