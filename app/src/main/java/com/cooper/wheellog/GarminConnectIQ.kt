@@ -608,6 +608,10 @@ internal class GarminConnectIQWebServer(
                         playHorn()
                         newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "Executed!") // Send data
                     }
+                    "/actions/toggleFrontLight" -> { // what the watch sends (FedWheel, protocol v2)
+                        wd.adapter?.switchFlashlight()
+                        newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "Executed!")
+                    }
                     "/actions/frontLight/enable" -> {
                         wd.updateLight(true)
                         newFixedLengthResponse(Response.Status.OK, MIME_PLAINTEXT, "Executed!") // Send data
