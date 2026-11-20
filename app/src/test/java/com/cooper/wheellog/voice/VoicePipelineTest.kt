@@ -15,6 +15,8 @@ class VoicePipelineTest {
     private val history by lazy { VoiceHistory(File(tmp.root, "h.json")) }
     private val store = VoiceSessionStore(idGenerator = { "sid" })
     private val spoken = mutableListOf<String>()
+    private val spokenErrors = mutableListOf<String>()
+    private var resultWhenSpoken: VoiceResult? = null
     private var askedWith: Pair<String, String>? = null
     private var sttText = "включи свет"
     private var agentPending: PendingAction? = null
@@ -35,7 +37,11 @@ class VoicePipelineTest {
             override fun confirm(actionId: String, confirm: Boolean) = if (confirm) "Сделано" else "Отменено"
         },
         speaker = object : Speaker {
-            override fun speak(text: String) { spoken += text }
+            override fun speak(text: String) {
+                resultWhenSpoken = store.result("sid")
+                spoken += text
+            }
+            override fun speakError(message: String) { spokenErrors += message }
         },
         scope = CoroutineScope(Dispatchers.Unconfined),
         history = history,
@@ -116,6 +122,22 @@ class VoicePipelineTest {
         pipeline.process(id, byteArrayOf(1))
         val e = history.entries.value.single()
         assertThat(e.state).isEqualTo(VoiceHistory.State.ERROR)
-        assertThat(e.reply).isEqualTo("Не расслышал, повторите")
+        assertThat(e.reply).isEqualTo("Не расслышала, повторите")
+    }
+
+    @Test
+    fun resultIsDoneBeforeReplyIsSpoken(): Unit = runBlocking {
+        val id = store.start()
+        pipeline.process(id, byteArrayOf(1))
+        assertThat(resultWhenSpoken?.state).isEqualTo(VoiceResult.DONE)
+    }
+
+    @Test
+    fun errorsGoThroughSpeakError(): Unit = runBlocking {
+        sttText = "  "
+        val id = store.start()
+        pipeline.process(id, byteArrayOf(1))
+        assertThat(spokenErrors).containsExactly("Не расслышала, повторите")
+        assertThat(spoken).isEmpty()
     }
 }

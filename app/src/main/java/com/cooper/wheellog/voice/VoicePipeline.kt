@@ -30,7 +30,7 @@ class VoicePipeline(
             text = timed(id, "stt") { stt.transcribe(pcm.samples, pcm.sampleRate) }.trim()
             log("[$id] text: \"$text\"")
             if (text.isNotEmpty()) history(id, text = text, state = VoiceHistory.State.PROCESSING)
-            if (text.isEmpty()) throw VoiceException("Не расслышал, повторите")
+            if (text.isEmpty()) throw VoiceException("Не расслышала, повторите")
             val answer = timed(id, "ask") { agent.ask(text, id) }
             store.setResult(id, VoiceResult(VoiceResult.DONE, text, answer.reply, answer.pendingAction != null), answer.pendingAction?.id)
             history(id, text = text, reply = answer.reply,
@@ -65,7 +65,11 @@ class VoicePipeline(
         Timber.tag(TAG).w(e, "[$id] failed: $message")
         store.setResult(id, VoiceResult.error(message, text))
         history(id, text = text, reply = message, state = VoiceHistory.State.ERROR)
-        speak(message)
+        try {
+            speaker.speakError(message)
+        } catch (e: Exception) {
+            Timber.tag(TAG).w(e, "speakError failed")
+        }
     }
 
     private fun history(id: String, text: String? = null, reply: String? = null, state: VoiceHistory.State) {

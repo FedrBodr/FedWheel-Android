@@ -9,7 +9,10 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** Client of the FedVoice server agent: POST {url}/v1/ask and {url}/v1/confirm. */
+/**
+ * Client of the FedVoice server agent: POST {url}/v1/ask, {url}/v1/confirm and {url}/v1/tts.
+ * TTS uses its own client with a long read timeout: uncached synthesis takes ~30-40 s.
+ */
 class VoiceServerClient(
     private val baseUrl: () -> String,
     private val token: () -> String,
@@ -19,7 +22,13 @@ class VoiceServerClient(
         .writeTimeout(TIMEOUT_S, TimeUnit.SECONDS)
         .callTimeout(TIMEOUT_S + 5, TimeUnit.SECONDS)
         .build(),
-) : VoiceAgent {
+    private val ttsHttp: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(TIMEOUT_S, TimeUnit.SECONDS)
+        .readTimeout(TTS_READ_TIMEOUT_S, TimeUnit.SECONDS)
+        .writeTimeout(TIMEOUT_S, TimeUnit.SECONDS)
+        .callTimeout(TTS_READ_TIMEOUT_S + 10, TimeUnit.SECONDS)
+        .build(),
+) : VoiceAgent, VoiceTts {
 
     override fun ask(text: String, session: String): AskResult {
         val json = post("/v1/ask", JSONObject().put("text", text).put("session", session))
@@ -34,7 +43,25 @@ class VoiceServerClient(
         return json.optString("reply", "")
     }
 
-    private fun post(path: String, body: JSONObject): JSONObject {
+    /** POST /v1/tts -> mp3 bytes; any failure is a VoiceException (caller falls back to phone TTS). */
+    override fun tts(text: String): ByteArray {
+        val request = request("/v1/tts", JSONObject().put("text", text))
+        try {
+            ttsHttp.newCall(request).execute().use { response ->
+                when {
+                    response.code == 401 || response.code == 403 -> throw VoiceException("Неверный токен сервера")
+                    !response.isSuccessful -> throw VoiceException("Синтез недоступен (${response.code})")
+                }
+                val bytes = response.body.bytes()
+                if (bytes.isEmpty()) throw VoiceException("Пустой ответ синтеза")
+                return bytes
+            }
+        } catch (e: IOException) {
+            throw VoiceException("Сервер недоступен", e)
+        }
+    }
+
+    private fun request(path: String, body: JSONObject): Request {
         val base = baseUrl().trim().trimEnd('/')
         if (base.isEmpty()) throw VoiceException("Не задан адрес голосового сервера")
         val request = try {
@@ -46,6 +73,11 @@ class VoiceServerClient(
         } catch (e: IllegalArgumentException) {
             throw VoiceException("Неверный адрес голосового сервера", e)
         }
+        return request
+    }
+
+    private fun post(path: String, body: JSONObject): JSONObject {
+        val request = request(path, body)
         try {
             http.newCall(request).execute().use { response ->
                 when {
@@ -63,6 +95,7 @@ class VoiceServerClient(
 
     companion object {
         private const val TIMEOUT_S = 20L
+        const val TTS_READ_TIMEOUT_S = 90L
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 }

@@ -1,5 +1,7 @@
 package com.cooper.wheellog
 
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Service
@@ -20,7 +22,9 @@ import com.cooper.wheellog.utils.Alarms
 import com.cooper.wheellog.utils.Constants
 import com.cooper.wheellog.utils.*
 import com.cooper.wheellog.utils.SomeUtil.playBeep
+import com.cooper.wheellog.voice.AndroidReplyAudio
 import com.cooper.wheellog.voice.AndroidSpeechToText
+import com.cooper.wheellog.voice.ReplySpeaker
 import com.cooper.wheellog.voice.FedVoiceAnnounce
 import com.cooper.wheellog.voice.OggOpusDecoder
 import com.cooper.wheellog.voice.VoiceBridgeHandler
@@ -69,6 +73,9 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
     // FedVoice
     @Volatile private var voiceServer: VoiceBridgeServer? = null
     private var voiceSpeaker: VoiceSpeaker? = null
+    private var voiceReplySpeaker: ReplySpeaker? = null
+    private var voiceReplyAudio: AndroidReplyAudio? = null
+    private var voiceTtsExecutor: ExecutorService? = null
     private var voiceStt: AndroidSpeechToText? = null
     private var voicePipeline: VoicePipeline? = null
     private var voiceScope: CoroutineScope? = null
@@ -367,7 +374,14 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
             Timber.tag(VoicePipeline.TAG).w("voice bridge needs Android 10+ (Ogg Opus decode)")
             return
         }
-        val speaker = VoiceSpeaker(applicationContext).also { voiceSpeaker = it }
+        val phoneTts = VoiceSpeaker(applicationContext).also { voiceSpeaker = it }
+        val serverClient = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken })
+        val speaker = ReplySpeaker(
+            tts = serverClient,
+            audio = AndroidReplyAudio(applicationContext).also { voiceReplyAudio = it },
+            fallback = phoneTts,
+            executor = Executors.newCachedThreadPool().also { voiceTtsExecutor = it },
+        ).also { voiceReplySpeaker = it }
         val stt = AndroidSpeechToText(applicationContext).also { voiceStt = it }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { voiceScope = it }
         val store = VoiceSessionStore()
@@ -375,7 +389,7 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
             store = store,
             decoder = OggOpusDecoder(cacheDir),
             stt = stt,
-            agent = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken }),
+            agent = serverClient,
             speaker = speaker,
             scope = scope,
             history = VoiceHistory.get(applicationContext),
@@ -429,7 +443,7 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
                         try {
                             val answer = VoiceServerClient({ appConfig.voiceServerUrl }, { appConfig.voiceServerToken }).ask(text, "debug")
                             Timber.tag(VoicePipeline.TAG).i("debug: ask -> $answer")
-                            voiceSpeaker?.speak(answer.reply)
+                            voiceReplySpeaker?.speak(answer.reply)
                         } catch (e: Exception) {
                             Timber.tag(VoicePipeline.TAG).e(e, "debug: ask failed")
                         }
@@ -454,6 +468,11 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
         voiceServer = null
         voiceScope?.cancel()
         voiceScope = null
+        voiceTtsExecutor?.shutdownNow()
+        voiceTtsExecutor = null
+        voiceReplySpeaker = null
+        voiceReplyAudio?.shutdown()
+        voiceReplyAudio = null
         voiceSpeaker?.shutdown()
         voiceSpeaker = null
         voiceStt = null

@@ -47,7 +47,7 @@ class AndroidSpeechToText(
                 Timber.tag(VoicePipeline.TAG).w("stt: on-device returned empty text, falling back to regular recognizer")
             } catch (e: RecognizerError) {
                 if (e.code == SpeechRecognizer.ERROR_NO_MATCH || e.code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                    throw VoiceException("Не расслышал, повторите", e)
+                    throw VoiceException("Не расслышала, повторите", e)
                 }
                 Timber.tag(VoicePipeline.TAG).w("stt: on-device failed (${e.message}), falling back to regular recognizer")
             }
@@ -222,7 +222,7 @@ class AndroidSpeechToText(
         private const val RECOGNITION_TIMEOUT_MS = 30_000L
 
         private fun userMessage(code: Int) = when (code) {
-            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Не расслышал, повторите"
+            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Не расслышала, повторите"
             SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Нет доступа к распознаванию (микрофон)"
             SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED, SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "Русский язык распознавания недоступен"
             SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT, SpeechRecognizer.ERROR_SERVER -> "Нет сети для распознавания"

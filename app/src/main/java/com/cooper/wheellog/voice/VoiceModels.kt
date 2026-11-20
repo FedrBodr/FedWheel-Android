@@ -43,6 +43,14 @@ interface VoiceAgent {
 
 interface Speaker {
     fun speak(text: String)
+
+    /** Speaks an error message; implementations may use a bundled clip instead of synthesis. */
+    fun speakError(message: String) = speak(message)
+}
+
+/** Server-side speech synthesis in the owner's chosen voice: text -> mp3 bytes. */
+interface VoiceTts {
+    fun tts(text: String): ByteArray
 }
 
 object FedVoiceAnnounce {

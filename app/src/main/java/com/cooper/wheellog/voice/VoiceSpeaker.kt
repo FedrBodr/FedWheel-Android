@@ -1,10 +1,7 @@
 package com.cooper.wheellog.voice
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.os.Build
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
@@ -17,17 +14,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * so music from other apps keeps playing quieter, and releases it when the utterance is done.
  */
 class VoiceSpeaker(context: Context, private val locale: Locale = Locale("ru", "RU")) : Speaker {
-    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val attributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-        .build()
-    private val focusRequest: Any? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(attributes)
-            .setOnAudioFocusChangeListener { }
-            .build()
-    } else null
+    private val focus = SpeechFocus(context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+    private val attributes = focus.attributes
     private val ids = AtomicInteger()
     private val activeUtterances = AtomicInteger()
 
@@ -85,24 +73,9 @@ class VoiceSpeaker(context: Context, private val locale: Locale = Locale("ru", "
         }
     }
 
-    @Suppress("DEPRECATION")
-    private fun requestFocus(): Boolean {
-        val r = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioManager.requestAudioFocus(focusRequest as AudioFocusRequest)
-        } else {
-            audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-        }
-        return r == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
+    private fun requestFocus() = focus.request()
 
-    @Suppress("DEPRECATION")
-    private fun abandonFocus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioManager.abandonAudioFocusRequest(focusRequest as AudioFocusRequest)
-        } else {
-            audioManager.abandonAudioFocus(null)
-        }
-    }
+    private fun abandonFocus() = focus.abandon()
 
     fun shutdown() {
         try { tts.stop(); tts.shutdown() } catch (_: Exception) {}

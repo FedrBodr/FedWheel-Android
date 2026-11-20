@@ -8,6 +8,9 @@ import org.junit.After
 import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
+import okhttp3.OkHttpClient
+import okio.Buffer
+import java.util.concurrent.TimeUnit
 
 class VoiceServerClientTest {
     private lateinit var server: MockWebServer
@@ -82,5 +85,44 @@ class VoiceServerClientTest {
     fun emptyUrlIsVoiceException() {
         val c = VoiceServerClient(baseUrl = { "" }, token = { "" })
         assertThrows(VoiceException::class.java) { c.ask("x", "s") }
+    }
+
+    @Test
+    fun ttsReturnsAudioBytes() {
+        val mp3 = byteArrayOf(0x49, 0x44, 0x33, 1, 2, 3)
+        server.enqueue(MockResponse().setHeader("Content-Type", "audio/mpeg").setHeader("X-Voice", "jessica")
+            .setBody(Buffer().write(mp3)))
+        assertThat(client.tts("Привет")).isEqualTo(mp3)
+        val req = server.takeRequest()
+        assertThat(req.method).isEqualTo("POST")
+        assertThat(req.path).isEqualTo("/v1/tts")
+        assertThat(req.getHeader("Authorization")).isEqualTo("Bearer tok")
+        assertThat(JSONObject(req.body.readUtf8()).getString("text")).isEqualTo("Привет")
+    }
+
+    @Test
+    fun tts503IsVoiceException() {
+        server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"elevenlabs down"}"""))
+        assertThrows(VoiceException::class.java) { client.tts("x") }
+    }
+
+    @Test
+    fun ttsEmptyBodyIsVoiceException() {
+        server.enqueue(MockResponse().setHeader("Content-Type", "audio/mpeg"))
+        assertThrows(VoiceException::class.java) { client.tts("x") }
+    }
+
+    @Test
+    fun ttsTimeoutIsVoiceException() {
+        server.enqueue(MockResponse().setBody("late").setHeadersDelay(2, TimeUnit.SECONDS))
+        val base = server.url("/").toString()
+        val c = VoiceServerClient(baseUrl = { base }, token = { "tok" },
+            ttsHttp = OkHttpClient.Builder().readTimeout(200, TimeUnit.MILLISECONDS).build())
+        assertThrows(VoiceException::class.java) { c.tts("x") }
+    }
+
+    @Test
+    fun ttsClientAllowsLongSynthesis() {
+        assertThat(VoiceServerClient.TTS_READ_TIMEOUT_S).isAtLeast(90L)
     }
 }

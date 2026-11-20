@@ -14,13 +14,16 @@ import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import timber.log.Timber
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Debug-only. Works without the Garmin service and without the watch:
  *  adb shell am broadcast -n com.cooper.wheellog.debug/com.cooper.wheellog.voice.VoiceDebugReceiver -a com.cooper.wheellog.debug.FEDVOICE_DIAG
  *  ... --es speak "Привет"           TTS with ducking
  *  ... --es file /sdcard/Download/q.ogg   decode -> STT, logs the text (no server call)
- *  ... --es ask "Который час"      typed phrase through VoicePipeline (server + TTS + voice history), no audio
+ *  ... --es ask "Который час"      typed phrase through VoicePipeline (server + server voice /v1/tts with
+ *                                   phone-TTS fallback + voice history), no audio
  * Voice samples (all ru voices of all TTS engines -> Android/data/<pkg>/files/voices/ (wav + voices.json)):
  *  adb shell am broadcast -n com.cooper.wheellog.debug/com.cooper.wheellog.voice.VoiceDebugReceiver -a com.cooper.wheellog.debug.FEDVOICE_VOICES            lists ru voices -> voices.json
  *  ... -a com.cooper.wheellog.debug.FEDVOICE_VOICES --ei index N --es text "Привет"   synthesizes voice #N
@@ -57,18 +60,25 @@ class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
                     Timber.tag(TAG).i("debug: STT \"$text\" in ${System.currentTimeMillis() - t1} ms")
                     if (text.isNotBlank()) speaker.speak("Вы сказали: $text")
                 }
-                intent.getStringExtra("ask")?.let { phrase -> askThroughPipeline(app, phrase, speaker) }
+                intent.getStringExtra("ask")?.let { phrase ->
+                    pending.finish() // server synthesis can take ~40 s, longer than a receiver may block
+                    askThroughPipeline(app, phrase, speaker)
+                }
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "debug: failed: ${e.message}")
             } finally {
                 delay(6_000) // let TTS init/speak and async diagnostics log
                 speaker.shutdown()
-                pending.finish()
+                if (intent.getStringExtra("ask") == null) pending.finish()
             }
         }
     }
 
-    private suspend fun askThroughPipeline(app: Context, phrase: String, speaker: Speaker) {
+    private suspend fun askThroughPipeline(app: Context, phrase: String, phoneTts: Speaker) {
+        val client = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken })
+        val executor = Executors.newSingleThreadExecutor()
+        val audio = AndroidReplyAudio(app)
+        val speaker = ReplySpeaker(tts = client, audio = audio, fallback = phoneTts, executor = executor)
         val store = VoiceSessionStore()
         val pipeline = VoicePipeline(
             store = store,
@@ -78,7 +88,7 @@ class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
             stt = object : SpeechToText {
                 override suspend fun transcribe(pcm: ShortArray, sampleRate: Int) = phrase
             },
-            agent = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken }),
+            agent = client,
             speaker = speaker,
             scope = CoroutineScope(Dispatchers.IO),
             history = VoiceHistory.get(app),
@@ -87,6 +97,10 @@ class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
         store.end(id)
         pipeline.process(id, byteArrayOf(0))
         Timber.tag(TAG).i("debug: ask \"$phrase\" -> ${store.result(id)}")
+        executor.shutdown()
+        executor.awaitTermination(VoiceServerClient.TTS_READ_TIMEOUT_S + 15, TimeUnit.SECONDS)
+        delay(15_000) // let the mp3 or the phone TTS finish before shutting down
+        audio.shutdown()
     }
 
     private companion object {
