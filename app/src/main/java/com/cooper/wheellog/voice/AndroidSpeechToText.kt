@@ -30,6 +30,9 @@ import kotlin.coroutines.resumeWithException
 class AndroidSpeechToText(
     private val context: Context,
     private val language: String = "ru-RU",
+    /** Feed audio at real-time pace instead of as fast as the pipe allows. */
+    var realtimeFeed: Boolean = false,
+    var trailingSilenceMs: Int = 1_500,
 ) : SpeechToText {
 
     private class RecognizerError(val code: Int) : Exception("recognizer error $code (${errorName(code)})")
@@ -39,7 +42,9 @@ class AndroidSpeechToText(
         val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
         if (onDevice) {
             try {
-                return runRecognizer(onDevice = true, pcm, sampleRate)
+                val text = runRecognizer(onDevice = true, pcm, sampleRate)
+                if (text.isNotBlank()) return text
+                Timber.tag(VoicePipeline.TAG).w("stt: on-device returned empty text, falling back to regular recognizer")
             } catch (e: RecognizerError) {
                 if (e.code == SpeechRecognizer.ERROR_NO_MATCH || e.code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                     throw VoiceException("Не расслышал, повторите", e)
@@ -80,6 +85,7 @@ class AndroidSpeechToText(
             val readSide = pipe[0]
             val writeSide = pipe[1]
             var finished = false
+            val partials = mutableListOf<String>()
             fun cleanup() {
                 if (finished) return
                 finished = true
@@ -90,7 +96,12 @@ class AndroidSpeechToText(
 
             recognizer.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle?) {
-                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                    Timber.tag(VoicePipeline.TAG).d("stt: results ${results?.keySet()?.associateWith { results.get(it) }}")
+                    val final = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    val text = TranscriptPicker.pick(final, partials)
+                    if (final.isNullOrBlank() && text.isNotEmpty()) {
+                        Timber.tag(VoicePipeline.TAG).i("stt: empty final result, using partials -> \"$text\"")
+                    }
                     cleanup()
                     if (cont.isActive) cont.resume(text)
                 }
@@ -106,7 +117,11 @@ class AndroidSpeechToText(
                 override fun onEndOfSpeech() = Timber.tag(VoicePipeline.TAG).d("stt: speech ends")
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val p = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                    Timber.tag(VoicePipeline.TAG).d("stt: partial $p")
+                    if (!p.isNullOrBlank()) partials += p
+                }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
             cont.invokeOnCancellation {
@@ -121,8 +136,19 @@ class AndroidSpeechToText(
             Thread({
                 try {
                     FileOutputStream(writeSide.fileDescriptor).use { os ->
-                        os.write(PcmUtils.toBytesLE(pcm))
-                        os.write(ByteArray(sampleRate * 2 * TRAILING_SILENCE_MS / 1000))
+                        val bytes = PcmUtils.toBytesLE(pcm) + ByteArray(sampleRate * 2 * trailingSilenceMs / 1000)
+                        if (realtimeFeed) {
+                            val step = sampleRate * 2 / 10 // 100 ms
+                            var off = 0
+                            while (off < bytes.size) {
+                                val n = minOf(step, bytes.size - off)
+                                os.write(bytes, off, n)
+                                off += n
+                                Thread.sleep(100)
+                            }
+                        } else {
+                            os.write(bytes)
+                        }
                         os.flush()
                     }
                 } catch (e: IOException) {
@@ -140,7 +166,7 @@ class AndroidSpeechToText(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
             if (audio != null) {
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, audio)
@@ -194,7 +220,6 @@ class AndroidSpeechToText(
 
     companion object {
         private const val RECOGNITION_TIMEOUT_MS = 30_000L
-        private const val TRAILING_SILENCE_MS = 1_500
 
         private fun userMessage(code: Int) = when (code) {
             SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Не расслышал, повторите"

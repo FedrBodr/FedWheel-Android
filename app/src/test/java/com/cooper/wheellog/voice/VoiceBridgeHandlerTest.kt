@@ -87,6 +87,27 @@ class VoiceBridgeHandlerTest {
     }
 
     @Test
+    fun startAcceptsEmptyBody() {
+        // Connect IQ serialises an empty dict as an empty body
+        for (body in listOf(null, "")) {
+            val r = handler.handle("POST", "/voice/start", emptyMap(), body)
+            assertThat(r.status).isEqualTo(200)
+            assertThat(JSONObject(r.json).getString("id")).isEqualTo("sid1")
+        }
+    }
+
+    @Test
+    fun errorsAlwaysHaveJsonBody() {
+        listOf(
+            handler.handle("POST", "/voice/end", emptyMap(), null),
+            handler.handle("POST", "/voice/end", emptyMap(), """{"id":"x"}"""),
+            handler.handle("POST", "/voice/confirm", emptyMap(), """{"id":"x","yes":true}"""),
+            handler.handle("GET", "/voice/result", emptyMap(), null),
+            handler.handle("GET", "/nope", emptyMap(), null),
+        ).forEach { JSONObject(it.json) }
+    }
+
+    @Test
     fun unknownPathIs404() {
         assertThat(handler.handle("GET", "/voice/zzz", emptyMap(), null).status).isEqualTo(404)
     }

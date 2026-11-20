@@ -100,7 +100,8 @@ class OggOpusDecoder(
                 }
             }
             val mono = PcmUtils.downmix(out.toArray(), channels)
-            Timber.tag(VoicePipeline.TAG).i("decode: ${mono.size} samples @ $sampleRate Hz, $channels ch -> $targetRate Hz mono")
+            val peak = mono.maxOfOrNull { kotlin.math.abs(it.toInt()) } ?: 0
+            Timber.tag(VoicePipeline.TAG).i("decode: ${mono.size} samples @ $sampleRate Hz, $channels ch -> $targetRate Hz mono, peak=$peak")
             return Pcm(PcmUtils.resample(mono, sampleRate, targetRate), targetRate)
         } catch (e: VoiceException) {
             throw e
