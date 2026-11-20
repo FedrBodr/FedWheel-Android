@@ -24,7 +24,7 @@ class VoiceDebugReceiver : BroadcastReceiver() {
         val app = context.applicationContext
         val pending = goAsync()
         val stt = AndroidSpeechToText(app, realtimeFeed = intent.getBooleanExtra("realtime", false),
-            trailingSilenceMs = intent.getIntExtra("silence", 1_500))
+            trailingSilenceMs = intent.getIntExtra("silence", 300))
         try { stt.logDiagnostics() } catch (e: Exception) { Timber.tag(TAG).w(e, "diag failed") }
         val speaker = VoiceSpeaker(app) // logs TTS ru-RU availability once initialised
         intent.getStringExtra("speak")?.let { speaker.speak(it) }

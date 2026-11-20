@@ -32,7 +32,7 @@ class AndroidSpeechToText(
     private val language: String = "ru-RU",
     /** Feed audio at real-time pace instead of as fast as the pipe allows. */
     var realtimeFeed: Boolean = false,
-    var trailingSilenceMs: Int = 1_500,
+    var trailingSilenceMs: Int = 300,
 ) : SpeechToText {
 
     private class RecognizerError(val code: Int) : Exception("recognizer error $code (${errorName(code)})")
