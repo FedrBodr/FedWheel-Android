@@ -175,6 +175,8 @@
     <string name="horn_mode" translatable="false">horn_mode</string>
     <string name="garmin_connectiq_enable" translatable="false">garmin_connectiq_enable</string>
     <string name="garmin_connectiq_use_beta" translatable="false">garmin_connectiq_use_beta</string>
+    <string name="voice_server_url" translatable="false">voice_server_url</string>
+    <string name="voice_server_token" translatable="false">voice_server_token</string>
 
     // TRIP PREFERENCES
     <string name="reset_max_values" translatable="false">reset_max_values</string>

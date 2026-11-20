@@ -603,4 +603,9 @@
     <string name="dashboard_pages_category_title">Страницы</string>
     <string name="audio_category_title">Звук</string>
     <string name="connection_category_title">Подключение</string>
+    <string name="voice_server_url_title">Адрес голосового сервера</string>
+    <string name="voice_server_url_description">Сервер-агент FedVoice, например https://example.com (пусто — голос выключен)</string>
+    <string name="voice_server_token_title">Токен голосового сервера</string>
+    <string name="voice_server_token_description">Bearer-токен для сервера FedVoice</string>
+    <string name="voice_not_set">не задан</string>
 </resources>

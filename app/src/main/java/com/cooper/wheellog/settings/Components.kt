@@ -82,6 +82,59 @@ fun clickablePref(
     }
 }
 
+/** Text preference: shows the current value (masked when [secret]) and edits it in a dialog. */
+@Composable
+fun textPref(
+    name: String,
+    desc: String = "",
+    default: String = "",
+    secret: Boolean = false,
+    showDiv: Boolean = true,
+    onChange: (String) -> Unit,
+) {
+    var value by remember { mutableStateOf(default) }
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf(default) }
+    if (editing) {
+        AlertDialog(
+            onDismissRequest = { editing = false },
+            title = { Text(name) },
+            text = {
+                TextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    value = draft
+                    onChange(draft)
+                    editing = false
+                }) { Text(stringResource(android.R.string.ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { editing = false }) { Text(stringResource(android.R.string.cancel)) }
+            },
+        )
+    }
+    val shown = when {
+        value.isEmpty() -> stringResource(R.string.voice_not_set)
+        secret -> "••••••"
+        else -> value
+    }
+    clickablePref(
+        name = name,
+        desc = if (desc.isEmpty()) shown else "$desc\n$shown",
+        showDiv = showDiv,
+    ) {
+        draft = value
+        editing = true
+    }
+}
+
 @Composable
 fun switchPref(
     name: String,

@@ -696,4 +696,9 @@
     <string name="create_test_log">Create new test log</string>
     <string name="permisson_error">Permission error</string>
     <string name="log_location_permisson_error_text">Please check permission settings.</string>
+    <string name="voice_server_url_title">Voice server URL</string>
+    <string name="voice_server_url_description">FedVoice server agent, e.g. https://example.com (empty = voice disabled)</string>
+    <string name="voice_server_token_title">Voice server token</string>
+    <string name="voice_server_token_description">Bearer token for the FedVoice server</string>
+    <string name="voice_not_set">not set</string>
 </resources>

@@ -60,9 +60,26 @@ fun watchScreen(appConfig: AppConfig = koinInject()) {
                 name = stringResource(R.string.garmin_connectiq_use_beta_title),
                 desc = stringResource(R.string.garmin_connectiq_use_beta_description),
                 default = appConfig.useGarminBetaCompanion,
-                showDiv = false,
             ) {
                 appConfig.useGarminBetaCompanion = it
+            }
+
+            textPref(
+                name = stringResource(R.string.voice_server_url_title),
+                desc = stringResource(R.string.voice_server_url_description),
+                default = appConfig.voiceServerUrl,
+            ) {
+                appConfig.voiceServerUrl = it.trim()
+            }
+
+            textPref(
+                name = stringResource(R.string.voice_server_token_title),
+                desc = stringResource(R.string.voice_server_token_description),
+                default = appConfig.voiceServerToken,
+                secret = true,
+                showDiv = false,
+            ) {
+                appConfig.voiceServerToken = it.trim()
             }
         }
 

@@ -3,6 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
     <queries>
         <package android:name="com.garmin.android.apps.connectmobile" />
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
     </queries>
 
     <uses-feature
@@ -41,6 +47,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- FedVoice: the speech recognizer is fed with watch audio but still checks the caller's RECORD_AUDIO -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <supports-screens
         android:anyDensity="true"
@@ -118,7 +127,7 @@
             android:foregroundServiceType="connectedDevice"
             android:exported="false" /> <!-- Services needed for Samsung Gear watches -->
         <service android:name="com.cooper.wheellog.GarminConnectIQ"
-            android:foregroundServiceType="connectedDevice"
+            android:foregroundServiceType="connectedDevice|microphone"
             android:exported="false" /> <!-- Services needed for Garmin ConnectIQ devices -->
 
         <provider

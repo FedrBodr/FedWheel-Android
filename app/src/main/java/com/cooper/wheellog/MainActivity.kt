@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.*
 import android.content.DialogInterface.OnShowListener
+import android.Manifest
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.drawable.AnimationDrawable
@@ -29,6 +30,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.*
 import androidx.compose.ui.platform.ComposeView
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.coroutineScope
 import androidx.navigation.NavHostController
@@ -1117,6 +1119,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleGarminConnectIQ() {
         val garminConnectIQIntent = Intent(applicationContext, GarminConnectIQ::class.java)
+        // FedVoice: the speech recognizer needs RECORD_AUDIO even though audio comes from the watch.
+        if (!GarminConnectIQ.isInstanceCreated && appConfig.voiceServerUrl.isNotBlank()
+            && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), RESULT_REQUEST_PERMISSIONS_AUDIO)
+        }
         if (GarminConnectIQ.isInstanceCreated) stopService(garminConnectIQIntent) else ContextCompat.startForegroundService(
             this,
             garminConnectIQIntent
@@ -1283,6 +1291,7 @@ class MainActivity : AppCompatActivity() {
         lateinit var audioManager: AudioManager
 
         const val RESULT_REQUEST_PERMISSIONS_BT = 40
+        const val RESULT_REQUEST_PERMISSIONS_AUDIO = 41
         const val RESULT_REQUEST_PERMISSIONS_IO = 50
         private var onDestroyProcess = false
 

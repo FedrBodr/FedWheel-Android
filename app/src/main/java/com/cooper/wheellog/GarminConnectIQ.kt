@@ -1,14 +1,34 @@
 package com.cooper.wheellog
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.widget.Toast
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.cooper.wheellog.utils.Alarms
 import com.cooper.wheellog.utils.Constants
 import com.cooper.wheellog.utils.*
 import com.cooper.wheellog.utils.SomeUtil.playBeep
+import com.cooper.wheellog.voice.AndroidSpeechToText
+import com.cooper.wheellog.voice.FedVoiceAnnounce
+import com.cooper.wheellog.voice.OggOpusDecoder
+import com.cooper.wheellog.voice.VoiceBridgeHandler
+import com.cooper.wheellog.voice.VoiceBridgeServer
+import com.cooper.wheellog.voice.VoicePipeline
+import com.cooper.wheellog.voice.VoiceServerClient
+import com.cooper.wheellog.voice.VoiceSessionStore
+import com.cooper.wheellog.voice.VoiceSpeaker
 import com.garmin.android.connectiq.ConnectIQ
 import com.garmin.android.connectiq.ConnectIQ.*
 import com.garmin.android.connectiq.IQApp
@@ -17,31 +37,49 @@ import com.garmin.android.connectiq.IQDevice.IQDeviceStatus
 import com.garmin.android.connectiq.exception.InvalidStateException
 import com.garmin.android.connectiq.exception.ServiceUnavailableException
 import fi.iki.elonen.NanoHTTPD
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.koin.android.ext.android.inject
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import timber.log.Timber
+import java.io.File
 import java.io.IOException
 import java.util.*
 
 class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListener, IQApplicationEventListener, ConnectIQListener {
     private val appConfig: AppConfig by inject()
     private val notifications: NotificationUtil by inject()
-    private var keepAliveTimer: Timer? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var announceLoopRunning = false
     private var mSdkReady = false
     private var mConnectIQ: ConnectIQ? = getInstance(this, IQConnectType.WIRELESS)
-    private var mDevice: IQDevice? = null
+    @Volatile private var mDevice: IQDevice? = null
+    @Volatile private var deviceConnected = false
     private var mApp: IQApp? = null
-    private var mWebServer: GarminConnectIQWebServer? = null
+    private val voiceApp = IQApp(FedVoiceAnnounce.APP_ID)
+    @Volatile private var mWebServer: GarminConnectIQWebServer? = null
     private var useBeta = appConfig.useGarminBetaCompanion
+
+    // FedVoice
+    @Volatile private var voiceServer: VoiceBridgeServer? = null
+    private var voiceSpeaker: VoiceSpeaker? = null
+    private var voiceStt: AndroidSpeechToText? = null
+    private var voicePipeline: VoicePipeline? = null
+    private var voiceScope: CoroutineScope? = null
+    private var debugReceiver: BroadcastReceiver? = null
 
     override fun onBind(intent: Intent): IBinder? {
         Timber.i("onBind")
         return null
     }
 
-    override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
+    // intent is null when the system restarts a START_STICKY service
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Timber.d("onStartCommand")
         instance = this
 
@@ -51,15 +89,47 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
         } else {
             IQApp(STABLE_APP_ID)
         }
-        mConnectIQ?.initialize(this, false, this)
-        startForeground(Constants.MAIN_NOTIFICATION_ID, notifications.notification)
+        startForegroundCompat()
+        if (mConnectIQ != null && !mSdkReady) {
+            try {
+                mConnectIQ?.initialize(this, false, this)
+            } catch (e: Exception) {
+                Timber.e(e, "ConnectIQ initialize failed")
+            }
+        }
+        startVoiceBridge()
+        startAnnounceLoop()
         return START_STICKY
+    }
+
+    private fun startForegroundCompat() {
+        val notification = notifications.notification
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || notification == null) {
+            startForeground(Constants.MAIN_NOTIFICATION_ID, notification)
+            return
+        }
+        val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        // The microphone type lets the speech recognizer receive our audio while the app is in background.
+        val canMic = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (canMic) {
+            try {
+                ServiceCompat.startForeground(this, Constants.MAIN_NOTIFICATION_ID, notification,
+                    base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                Timber.tag(VoicePipeline.TAG).i("foreground service: connectedDevice|microphone")
+                return
+            } catch (e: Exception) {
+                Timber.tag(VoicePipeline.TAG).w(e, "foreground service: microphone type refused")
+            }
+        } else {
+            Timber.tag(VoicePipeline.TAG).w("foreground service: RECORD_AUDIO not granted, no microphone type")
+        }
+        ServiceCompat.startForeground(this, Constants.MAIN_NOTIFICATION_ID, notification, base)
     }
 
     override fun onDestroy() {
         Timber.d("onDestroy")
         super.onDestroy()
-        cancelRefreshTimer()
+        stopAnnounceLoop()
         try {
             mConnectIQ?.unregisterAllForEvents()
             mConnectIQ?.shutdown(this)
@@ -68,6 +138,7 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
             // so no worries.
         }
         stopWebServer()
+        stopVoiceBridge()
         unregisterWithDevice()
         instance = null
     }
@@ -122,6 +193,12 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
             } catch (e: InvalidStateException) {
                 Toast.makeText(this, "ConnectIQ is not in a valid state", Toast.LENGTH_LONG).show()
             }
+            // FedVoice: receive its hello messages to answer with the voice port right away
+            try {
+                mConnectIQ?.registerForAppEvents(mDevice, voiceApp, this)
+            } catch (e: Exception) {
+                Timber.tag(VoicePipeline.TAG).w(e, "registerForAppEvents(FedVoice) failed")
+            }
         }
     }
 
@@ -135,15 +212,11 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
                 if (mApp != null) {
                     mConnectIQ?.unregisterForApplicationEvents(mDevice, mApp)
                 }
+                mConnectIQ?.unregisterForApplicationEvents(mDevice, voiceApp)
             } catch (ignored: InvalidStateException) {
 
             }
         }
-    }
-
-    private fun cancelRefreshTimer() {
-        keepAliveTimer?.cancel()
-        keepAliveTimer = null
     }
 
     // IQApplicationInfoListener METHODS
@@ -153,17 +226,9 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
     }
 
     override fun onApplicationNotInstalled(arg0: String) {
-        Timber.d("onApplicationNotInstalled")
-
-        // The WheelLog app is not installed on the device so we have
-        // to let the user know to install it.
-        cancelRefreshTimer() // no point in sending data...
-        Toast.makeText(this, R.string.garmin_connectiq_missing_app_message, Toast.LENGTH_LONG).show()
-        try {
-            mConnectIQ?.openStore("35719a02-8a5d-46bc-b474-f26c54c4e045")
-        } catch (ignored: InvalidStateException) {
-        } catch (ignored: ServiceUnavailableException) {
-        }
+        // Sideloaded watch apps may be reported as not installed, so neither stop announcing
+        // nor push the store page here.
+        Timber.w("onApplicationNotInstalled: $arg0 (ignored, sideloaded apps are reported this way)")
     }
 
     // IQDeviceEventListener METHODS
@@ -171,17 +236,28 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
         Timber.d("onDeviceStatusChanged")
         Timber.d("status is: ${status.name}")
         if (status.name == "CONNECTED") {
+            deviceConnected = true
             startWebServer()
+            voiceAnnouncer.reset()
         } else {
-            cancelRefreshTimer()
+            deviceConnected = false
             stopWebServer()
         }
     }
 
     // IQApplicationEventListener
     override fun onMessageReceived(device: IQDevice, app: IQApp, message: List<Any>, status: IQMessageStatus) {
-        Timber.d("onMessageReceived")
-        // This thing won't do anything, because every data transmit is done through a web server
+        Timber.d("onMessageReceived from ${app.applicationId}: $message")
+        // Data goes through the web servers; any message is treated as "hello, what is your port?"
+        mainHandler.post {
+            if (app.applicationId.equals(FedVoiceAnnounce.APP_ID, ignoreCase = true)) {
+                voiceAnnouncer.reset()
+                sendVoicePort()
+            } else {
+                portAnnouncer.reset()
+                sendPort()
+            }
+        }
     }
 
     // ConnectIQListener METHODS
@@ -202,9 +278,11 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
     }
 
     private val portAnnouncer = GarminPortAnnouncer()
+    private val voiceAnnouncer = GarminPortAnnouncer()
 
     private fun startWebServer() {
         Timber.d("startWebServer")
+        portAnnouncer.reset()
         if (mWebServer != null) return
         try {
             mWebServer = GarminConnectIQWebServer(applicationContext) {
@@ -212,37 +290,64 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
             }
             Timber.d("port is: ${mWebServer!!.listeningPort}")
             sendPort()
-            startPortAnnouncements()
         } catch (e: IOException) {
             Timber.e(e, "IOException happened while starting ConnectIQ web server")
         }
     }
 
     // Upstream sent the port only once, so a watch app opened later never connected.
-    // Re-send it while the watch is not polling the web server.
-    private fun startPortAnnouncements() {
-        cancelRefreshTimer()
-        keepAliveTimer = Timer().apply {
-            schedule(object : TimerTask() {
-                override fun run() {
-                    if (mWebServer != null && portAnnouncer.shouldAnnounce(System.currentTimeMillis())) {
-                        sendPort()
-                    }
-                }
-            }, PORT_ANNOUNCE_PERIOD_MS, PORT_ANNOUNCE_PERIOD_MS)
+    // Re-send it (with backoff) while the watch is not polling the web server. Runs on the main
+    // thread: Connect IQ calls must not throw on a Timer thread (that kills the whole app).
+    private val announceTick = object : Runnable {
+        override fun run() {
+            if (!announceLoopRunning) return
+            val now = System.currentTimeMillis()
+            try {
+                if (mWebServer != null && portAnnouncer.shouldAnnounce(now)) sendPort()
+                if (voiceServer != null && deviceConnected && voiceAnnouncer.shouldAnnounce(now)) sendVoicePort()
+            } catch (e: Exception) {
+                Timber.e(e, "port announce failed")
+            }
+            mainHandler.postDelayed(this, ANNOUNCE_TICK_MS)
         }
+    }
+
+    private fun startAnnounceLoop() {
+        if (announceLoopRunning) return
+        announceLoopRunning = true
+        mainHandler.postDelayed(announceTick, ANNOUNCE_TICK_MS)
+    }
+
+    private fun stopAnnounceLoop() {
+        announceLoopRunning = false
+        mainHandler.removeCallbacks(announceTick)
     }
 
     private fun sendPort() {
         val server = mWebServer ?: return
+        portAnnouncer.onAnnounced(System.currentTimeMillis())
+        sendToWatch(mApp, server.listeningPort, "port")
+    }
+
+    private fun sendVoicePort() {
+        val server = voiceServer ?: return
+        if (mDevice == null) return
+        voiceAnnouncer.onAnnounced(System.currentTimeMillis())
+        sendToWatch(voiceApp, FedVoiceAnnounce.message(server.listeningPort), "fv port")
+    }
+
+    private fun sendToWatch(app: IQApp?, message: Any, what: String) {
+        val device = mDevice ?: return
         try {
-            mConnectIQ?.sendMessage(mDevice, mApp, server.listeningPort) { _: IQDevice?, _: IQApp?, status: IQMessageStatus ->
-                Timber.d("message status: ${status.name}")
+            mConnectIQ?.sendMessage(device, app, message) { _: IQDevice?, _: IQApp?, status: IQMessageStatus ->
+                Timber.d("$what message status: ${status.name}")
             }
         } catch (e: InvalidStateException) {
             Timber.e("ConnectIQ is not in a valid state")
         } catch (e: ServiceUnavailableException) {
             Timber.e("ConnectIQ service is unavailable. Is Garmin Connect Mobile installed and running?")
+        } catch (e: Exception) {
+            Timber.e(e, "ConnectIQ sendMessage($what) failed")
         }
     }
 
@@ -252,10 +357,111 @@ class GarminConnectIQ : Service(), IQApplicationInfoListener, IQDeviceEventListe
         mWebServer = null
     }
 
+    // region FedVoice
+    private fun startVoiceBridge() {
+        if (voiceServer != null) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Timber.tag(VoicePipeline.TAG).w("voice bridge needs Android 10+ (Ogg Opus decode)")
+            return
+        }
+        val speaker = VoiceSpeaker(applicationContext).also { voiceSpeaker = it }
+        val stt = AndroidSpeechToText(applicationContext).also { voiceStt = it }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { voiceScope = it }
+        val store = VoiceSessionStore()
+        val pipeline = VoicePipeline(
+            store = store,
+            decoder = OggOpusDecoder(cacheDir),
+            stt = stt,
+            agent = VoiceServerClient(baseUrl = { appConfig.voiceServerUrl }, token = { appConfig.voiceServerToken }),
+            speaker = speaker,
+            scope = scope,
+        ).also { voicePipeline = it }
+        try {
+            voiceServer = VoiceBridgeServer(VoiceBridgeHandler(store, pipeline)) {
+                voiceAnnouncer.onWatchRequest(System.currentTimeMillis())
+            }
+            Timber.tag(VoicePipeline.TAG).i("voice server on 127.0.0.1:${voiceServer!!.listeningPort}, " +
+                "server url ${if (appConfig.voiceServerUrl.isBlank()) "NOT SET" else "set"}, " +
+                "RECORD_AUDIO=${ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED}")
+        } catch (e: IOException) {
+            Timber.tag(VoicePipeline.TAG).e(e, "cannot start voice server")
+        }
+        try {
+            stt.logDiagnostics()
+        } catch (e: Exception) {
+            Timber.tag(VoicePipeline.TAG).w(e, "diag failed")
+        }
+        if (BuildConfig.DEBUG) registerDebugReceiver(store)
+    }
+
+    /**
+     * Debug-only adb hooks, e.g.:
+     *  adb shell am broadcast -a com.cooper.wheellog.debug.FEDVOICE --es speak "Привет"
+     *  adb shell am broadcast -a com.cooper.wheellog.debug.FEDVOICE --es file /data/local/tmp/q.ogg
+     *  adb shell am broadcast -a com.cooper.wheellog.debug.FEDVOICE --es ask "Который час"
+     */
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private fun registerDebugReceiver(store: VoiceSessionStore) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val scope = voiceScope ?: return
+                intent.getStringExtra("speak")?.let { voiceSpeaker?.speak(it) }
+                intent.getStringExtra("file")?.let { path ->
+                    scope.launch {
+                        try {
+                            val bytes = File(path).readBytes()
+                            val id = store.start()
+                            store.end(id)
+                            Timber.tag(VoicePipeline.TAG).i("debug: file $path (${bytes.size} bytes) as session $id")
+                            voicePipeline?.process(id, bytes)
+                            Timber.tag(VoicePipeline.TAG).i("debug: result ${store.result(id)}")
+                        } catch (e: Exception) {
+                            Timber.tag(VoicePipeline.TAG).e(e, "debug: file failed")
+                        }
+                    }
+                }
+                intent.getStringExtra("ask")?.let { text ->
+                    scope.launch {
+                        try {
+                            val answer = VoiceServerClient({ appConfig.voiceServerUrl }, { appConfig.voiceServerToken }).ask(text, "debug")
+                            Timber.tag(VoicePipeline.TAG).i("debug: ask -> $answer")
+                            voiceSpeaker?.speak(answer.reply)
+                        } catch (e: Exception) {
+                            Timber.tag(VoicePipeline.TAG).e(e, "debug: ask failed")
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter(DEBUG_ACTION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
+        debugReceiver = receiver
+        Timber.tag(VoicePipeline.TAG).i("debug receiver registered: $DEBUG_ACTION")
+    }
+
+    private fun stopVoiceBridge() {
+        debugReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        debugReceiver = null
+        voiceServer?.stop()
+        voiceServer = null
+        voiceScope?.cancel()
+        voiceScope = null
+        voiceSpeaker?.shutdown()
+        voiceSpeaker = null
+        voiceStt = null
+        voicePipeline = null
+    }
+    // endregion
+
     companion object {
         const val STABLE_APP_ID = "487e6172-972c-4f93-a4db-26fd689f935a"
         const val BETA_APP_ID = "433c30dc-f316-4d11-a16e-de153d297705"
-        private const val PORT_ANNOUNCE_PERIOD_MS = 2_000L
+        private const val ANNOUNCE_TICK_MS = 1_000L
+        private const val DEBUG_ACTION = "com.cooper.wheellog.debug.FEDVOICE"
 
         private var instance: GarminConnectIQ? = null
         val isInstanceCreated: Boolean

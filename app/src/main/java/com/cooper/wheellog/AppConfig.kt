@@ -277,6 +277,14 @@ class AppConfig(var context: Context): KoinComponent {
         get() = getValue(R.string.garmin_connectiq_use_beta, false)
         set(value) = setValue(R.string.garmin_connectiq_use_beta, value)
 
+    var voiceServerUrl: String
+        get() = getValue(R.string.voice_server_url, "")
+        set(value) = setValue(R.string.voice_server_url, value)
+
+    var voiceServerToken: String
+        get() = getValue(R.string.voice_server_token, "")
+        set(value) = setValue(R.string.voice_server_token, value)
+
     var mainMenuButtons: Array<String>
         get() = getValue<String?>("main_menu_buttons", null)?.split(separator)?.toTypedArray()
             ?: arrayOf("watch")
