@@ -125,4 +125,11 @@ class VoiceServerClientTest {
     fun ttsClientAllowsLongSynthesis() {
         assertThat(VoiceServerClient.TTS_READ_TIMEOUT_S).isAtLeast(90L)
     }
+
+    @Test
+    fun askAndConfirmWaitLongEnoughForSlowAgentReplies() {
+        // the agent may take ~30 s+ (extra Hub tool calls); the watch keeps polling for 90 s
+        assertThat(VoiceServerClient.ASK_READ_TIMEOUT_S).isEqualTo(60L)
+        assertThat(VoiceServerClient.TTS_READ_TIMEOUT_S).isAtLeast(VoiceServerClient.ASK_READ_TIMEOUT_S)
+    }
 }

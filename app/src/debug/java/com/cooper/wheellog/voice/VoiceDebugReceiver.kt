@@ -22,6 +22,8 @@ import java.util.concurrent.TimeUnit
  *  adb shell am broadcast -n com.cooper.wheellog.debug/com.cooper.wheellog.voice.VoiceDebugReceiver -a com.cooper.wheellog.debug.FEDVOICE_DIAG
  *  ... --es speak "Привет"           TTS with ducking
  *  ... --es file /sdcard/Download/q.ogg   decode -> STT, logs the text (no server call)
+ *      [--ei segms 60000]  longest recognizer segment (default 20000; long audio is split at pauses)
+ *      [--ei endsilence 0] EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS (default 5000, 0 = not set)
  *  ... --es ask "Который час"      typed phrase through VoicePipeline (server + server voice /v1/tts with
  *                                   phone-TTS fallback + voice history), no audio
  * Voice samples (all ru voices of all TTS engines -> Android/data/<pkg>/files/voices/ (wav + voices.json)):
@@ -44,7 +46,10 @@ class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
             return
         }
         val stt = AndroidSpeechToText(app, realtimeFeed = intent.getBooleanExtra("realtime", false),
-            trailingSilenceMs = intent.getIntExtra("silence", 300))
+            trailingSilenceMs = intent.getIntExtra("silence", 300)).apply {
+            maxSegmentMs = intent.getIntExtra("segms", maxSegmentMs)
+            endSilenceMs = intent.getIntExtra("endsilence", endSilenceMs)
+        }
         try { stt.logDiagnostics() } catch (e: Exception) { Timber.tag(TAG).w(e, "diag failed") }
         val speaker = VoiceSpeaker(app) // logs TTS ru-RU availability once initialised
         intent.getStringExtra("speak")?.let { speaker.speak(it) }

@@ -33,12 +33,37 @@ class AndroidSpeechToText(
     /** Feed audio at real-time pace instead of as fast as the pipe allows. */
     var realtimeFeed: Boolean = false,
     var trailingSilenceMs: Int = 300,
+    /** Longest piece handed to one recognizer run; longer audio is split at pauses. */
+    var maxSegmentMs: Int = PcmSegmenter.MAX_MS,
+    /** Pause length that ends recognition (EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS); 0 = recognizer default. */
+    var endSilenceMs: Int = 5_000,
 ) : SpeechToText {
 
     private class RecognizerError(val code: Int) : Exception("recognizer error $code (${errorName(code)})")
 
     override suspend fun transcribe(pcm: ShortArray, sampleRate: Int): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) throw VoiceException("Нужен Android 13+")
+        // Long speech: the recognizer may stop at the first long pause, so it gets <= maxSegmentMs
+        // pieces cut at pauses, and the transcripts are joined in order.
+        val segments = PcmSegmenter.split(pcm, sampleRate, maxSegmentMs)
+        if (segments.size > 1) {
+            Timber.tag(VoicePipeline.TAG).i("stt: ${pcm.size * 1000L / sampleRate} ms of audio -> ${segments.size} segments " +
+                segments.joinToString { "${(it.last - it.first + 1) * 1000L / sampleRate} ms" })
+        }
+        val parts = segments.mapIndexed { i, r ->
+            val seg = if (segments.size == 1) pcm else pcm.copyOfRange(r.first, r.last + 1)
+            transcribeSegment(seg, sampleRate).also {
+                if (segments.size > 1) Timber.tag(VoicePipeline.TAG).i("stt: segment ${i + 1}/${segments.size} -> \"$it\"")
+            }
+        }
+        val text = PcmSegmenter.join(parts)
+        if (text.isEmpty() && parts.isNotEmpty()) throw VoiceException("Не расслышала, повторите")
+        return text
+    }
+
+    /** One recognizer run (on-device first, then the regular one); "" when no speech was recognised. */
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private suspend fun transcribeSegment(pcm: ShortArray, sampleRate: Int): String {
         val onDevice = SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
         if (onDevice) {
             try {
@@ -46,9 +71,7 @@ class AndroidSpeechToText(
                 if (text.isNotBlank()) return text
                 Timber.tag(VoicePipeline.TAG).w("stt: on-device returned empty text, falling back to regular recognizer")
             } catch (e: RecognizerError) {
-                if (e.code == SpeechRecognizer.ERROR_NO_MATCH || e.code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                    throw VoiceException("Не расслышала, повторите", e)
-                }
+                if (e.code == SpeechRecognizer.ERROR_NO_MATCH || e.code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) return ""
                 Timber.tag(VoicePipeline.TAG).w("stt: on-device failed (${e.message}), falling back to regular recognizer")
             }
         } else {
@@ -58,6 +81,7 @@ class AndroidSpeechToText(
         return try {
             runRecognizer(onDevice = false, pcm, sampleRate)
         } catch (e: RecognizerError) {
+            if (e.code == SpeechRecognizer.ERROR_NO_MATCH || e.code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) return ""
             throw VoiceException(userMessage(e.code), e)
         }
     }
@@ -129,7 +153,7 @@ class AndroidSpeechToText(
                 android.os.Handler(android.os.Looper.getMainLooper()).post { cleanup() }
             }
 
-            recognizer.startListening(buildIntent(readSide, sampleRate))
+            recognizer.startListening(buildIntent(readSide, sampleRate, minLengthMs = (pcm.size * 1000L / sampleRate).toInt()))
 
             // Feed the audio (plus trailing silence so end-of-speech is detected) from a background thread:
             // the pipe blocks when full.
@@ -160,7 +184,7 @@ class AndroidSpeechToText(
         }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun buildIntent(audio: ParcelFileDescriptor?, sampleRate: Int) =
+    private fun buildIntent(audio: ParcelFileDescriptor?, sampleRate: Int, minLengthMs: Int = 0) =
         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
@@ -168,6 +192,12 @@ class AndroidSpeechToText(
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
+            if (endSilenceMs > 0) {
+                // Do not end at a pause between sentences; honoured by some recognizers only.
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, endSilenceMs.toLong())
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, endSilenceMs.toLong())
+                if (minLengthMs > 0) putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minLengthMs.toLong())
+            }
             if (audio != null) {
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, audio)
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)

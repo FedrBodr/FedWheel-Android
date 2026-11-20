@@ -18,9 +18,9 @@ class VoiceServerClient(
     private val token: () -> String,
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_S, TimeUnit.SECONDS)
-        .readTimeout(TIMEOUT_S, TimeUnit.SECONDS)
+        .readTimeout(ASK_READ_TIMEOUT_S, TimeUnit.SECONDS)
         .writeTimeout(TIMEOUT_S, TimeUnit.SECONDS)
-        .callTimeout(TIMEOUT_S + 5, TimeUnit.SECONDS)
+        .callTimeout(ASK_READ_TIMEOUT_S, TimeUnit.SECONDS)
         .build(),
     private val ttsHttp: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(TIMEOUT_S, TimeUnit.SECONDS)
@@ -95,6 +95,8 @@ class VoiceServerClient(
 
     companion object {
         private const val TIMEOUT_S = 20L
+        /** /v1/ask and /v1/confirm: the agent may call several Hub tools (~30 s+); the watch polls for up to 90 s. */
+        const val ASK_READ_TIMEOUT_S = 60L
         const val TTS_READ_TIMEOUT_S = 90L
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
