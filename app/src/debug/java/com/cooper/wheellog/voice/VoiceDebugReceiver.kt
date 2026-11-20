@@ -21,6 +21,9 @@ import java.io.File
  *  ... --es speak "Привет"           TTS with ducking
  *  ... --es file /sdcard/Download/q.ogg   decode -> STT, logs the text (no server call)
  *  ... --es ask "Который час"      typed phrase through VoicePipeline (server + TTS + voice history), no audio
+ * Voice samples (all ru voices of all TTS engines -> Android/data/<pkg>/files/voices/ (wav + voices.json)):
+ *  adb shell am broadcast -n com.cooper.wheellog.debug/com.cooper.wheellog.voice.VoiceDebugReceiver -a com.cooper.wheellog.debug.FEDVOICE_VOICES            lists ru voices -> voices.json
+ *  ... -a com.cooper.wheellog.debug.FEDVOICE_VOICES --ei index N --es text "Привет"   synthesizes voice #N
  * Output: adb logcat -s FedVoice
  */
 class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
@@ -29,6 +32,14 @@ class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
         val pending = goAsync()
+        if (intent.action == ACTION_VOICES) {
+            val text = intent.getStringExtra("text") ?: "Привет! Это проверка голоса."
+            CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+                try { VoiceSamplesDebug.run(app, text, intent.getIntExtra("index", -1)) } catch (e: Exception) { Timber.tag(TAG).e(e, "voices failed") }
+                finally { pending.finish() }
+            }
+            return
+        }
         val stt = AndroidSpeechToText(app, realtimeFeed = intent.getBooleanExtra("realtime", false),
             trailingSilenceMs = intent.getIntExtra("silence", 300))
         try { stt.logDiagnostics() } catch (e: Exception) { Timber.tag(TAG).w(e, "diag failed") }
@@ -78,5 +89,8 @@ class VoiceDebugReceiver : BroadcastReceiver(), KoinComponent {
         Timber.tag(TAG).i("debug: ask \"$phrase\" -> ${store.result(id)}")
     }
 
-    private companion object { const val TAG = "FedVoice" }
+    private companion object {
+        const val TAG = "FedVoice"
+        const val ACTION_VOICES = "com.cooper.wheellog.debug.FEDVOICE_VOICES"
+    }
 }
