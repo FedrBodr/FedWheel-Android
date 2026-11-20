@@ -6,5 +6,8 @@
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
         <domain includeSubdomains="true">ts.net</domain>
+        <!-- owner's Headscale tailnet: MagicDNS names and the Mac's tailnet address -->
+        <domain includeSubdomains="true">tail.fedrbodr.net</domain>
+        <domain includeSubdomains="false">100.64.0.2</domain>
     </domain-config>
 </network-security-config>
