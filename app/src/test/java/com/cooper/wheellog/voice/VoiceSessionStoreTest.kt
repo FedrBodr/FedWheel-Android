@@ -54,4 +54,15 @@ class VoiceSessionStoreTest {
         assertThat(store.result(id)).isEqualTo(VoiceResult(VoiceResult.DONE, "текст", "ответ", true))
         assertThat(store.pendingAction(id)).isEqualTo("a1")
     }
+
+    @Test
+    fun sixtySecondRecordingStreamedInChunksIsAssembledWhole() {
+        // 60 s of 16 kHz Ogg/Opus from the watch is ~220 KB: 73+ chunks of 3000 bytes sent while recording
+        val id = store.start()
+        val audio = ByteArray(300_000) { (it % 251).toByte() }
+        for (seq in 0 until 100) {
+            assertThat(store.addChunk(id, seq, audio.copyOfRange(seq * 3000, (seq + 1) * 3000))).isTrue()
+        }
+        assertThat(store.end(id)).isEqualTo(audio)
+    }
 }
